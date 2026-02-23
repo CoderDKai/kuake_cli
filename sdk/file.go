@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"log"
 	"mime"
 	"net/http"
 	"net/url"
@@ -290,7 +291,16 @@ func (qc *QuarkClient) uploadPartsParallel(
 				currentHashCtx = cloneHashCtx(hashCtx)
 			}
 
-			hashCtx, _ = updateHashCtxFromHash(cumulativeHash, chunk, processedBytes)
+			var hashErr error
+			hashCtx, hashErr = updateHashCtxFromHash(cumulativeHash, chunk, processedBytes)
+			if hashErr != nil {
+				resultCh <- uploadPartResult{
+					partNumber: partNumber,
+					err:        fmt.Errorf("failed to update hash context: %w", hashErr),
+				}
+				cancel()
+				return
+			}
 			processedBytes += int64(len(chunk))
 
 			job := uploadPartJob{
@@ -331,7 +341,18 @@ func (qc *QuarkClient) uploadPartsParallel(
 
 		uploadedPartMap[result.partNumber] = result.etag
 		savedState.UploadedParts[result.partNumber] = result.etag
-		_ = saveUploadState(statePath, savedState)
+
+		// 保存断点续传状态，重试 3 次
+		maxRetries := 3
+		for i := 0; i < maxRetries; i++ {
+			if err := saveUploadState(statePath, savedState); err != nil {
+				if i == maxRetries-1 {
+					log.Printf("Warning: failed to save upload state after %d retries: %v", maxRetries, err)
+				}
+			} else {
+				break
+			}
+		}
 
 		uploadedBytes += result.size
 		if progressCallback != nil {
@@ -1149,7 +1170,11 @@ func (qc *QuarkClient) UploadFile(filePath, destPath string, progressCallback fu
 				}
 			}
 			// 从累积的哈希对象生成HashCtx
-			hashCtx, _ = updateHashCtxFromHash(cumulativeHash, []byte{}, processedBytes)
+			var err error
+			hashCtx, err = updateHashCtxFromHash(cumulativeHash, []byte{}, processedBytes)
+			if err != nil {
+				return nil, fmt.Errorf("failed to update hash context: %w", err)
+			}
 			// 恢复文件位置到当前分片
 			file.Seek(processedBytes, 0)
 		}
@@ -1242,7 +1267,17 @@ func (qc *QuarkClient) UploadFile(filePath, destPath string, progressCallback fu
 				for i, etag := range etags {
 					savedState.UploadedParts[i+1] = etag
 				}
-				_ = saveUploadState(statePath, savedState)
+				// 保存断点续传状态，重试 3 次
+				maxRetries := 3
+				for i := 0; i < maxRetries; i++ {
+					if err := saveUploadState(statePath, savedState); err != nil {
+						if i == maxRetries-1 {
+							log.Printf("Warning: failed to save upload state after %d retries: %v", maxRetries, err)
+						}
+					} else {
+						break
+					}
+				}
 
 				return &StandardResponse{
 					Success: false,
@@ -1279,7 +1314,17 @@ func (qc *QuarkClient) UploadFile(filePath, destPath string, progressCallback fu
 				for i, uploadedEtag := range etags {
 					savedState.UploadedParts[i+1] = uploadedEtag
 				}
-				_ = saveUploadState(statePath, savedState)
+				// 保存断点续传状态，重试 3 次
+				maxRetries := 3
+				for i := 0; i < maxRetries; i++ {
+					if err := saveUploadState(statePath, savedState); err != nil {
+						if i == maxRetries-1 {
+							log.Printf("Warning: failed to save upload state after %d retries: %v", maxRetries, err)
+						}
+					} else {
+						break
+					}
+				}
 
 				return &StandardResponse{
 					Success: false,
@@ -1293,7 +1338,11 @@ func (qc *QuarkClient) UploadFile(filePath, destPath string, progressCallback fu
 
 			// 更新累积的SHA1哈希对象和HashCtx（为下一个分片准备）
 			if cumulativeHash != nil {
-				hashCtx, _ = updateHashCtxFromHash(cumulativeHash, chunk, processedBytes)
+				var err error
+				hashCtx, err = updateHashCtxFromHash(cumulativeHash, chunk, processedBytes)
+				if err != nil {
+					return nil, fmt.Errorf("failed to update hash context: %w", err)
+				}
 				processedBytes += int64(len(chunk))
 			}
 
@@ -1307,8 +1356,17 @@ func (qc *QuarkClient) UploadFile(filePath, destPath string, progressCallback fu
 				}
 			}
 			savedState.UploadedParts[partNumber] = etag
-			// 每上传一个分片后保存状态
-			_ = saveUploadState(statePath, savedState)
+			// 每上传一个分片后保存状态，重试 3 次
+			maxRetries := 3
+			for i := 0; i < maxRetries; i++ {
+				if err := saveUploadState(statePath, savedState); err != nil {
+					if i == maxRetries-1 {
+						log.Printf("Warning: failed to save upload state after %d retries: %v", maxRetries, err)
+					}
+				} else {
+					break
+				}
+			}
 
 			// 更新进度
 			if progressCallback != nil {
@@ -2456,10 +2514,17 @@ func (b *OSSCommitHeaderBuilder) BuildHeaders(req *http.Request, qc *QuarkClient
 	return nil
 }
 
-// GetDownloadURL 获取文件的下载链接（支持同步与异步，大文件为异步任务会轮询直到拿到 URL）
+// GetDownloadURL 获取文件的下载链接（使用桌面客户端 API，可绕过网页版下载限制）
 // fid: 文件ID
 // 返回: 下载链接URL
 func (qc *QuarkClient) GetDownloadURL(fid string) (string, error) {
+	return qc.getDownloadURLInternal(fid, true)
+}
+
+// getDownloadURLInternal 内部方法，获取文件的下载链接
+// fid: 文件ID
+// usePCClient: 是否使用桌面客户端 API（可绕过网页版下载限制）
+func (qc *QuarkClient) getDownloadURLInternal(fid string, usePCClient bool) (string, error) {
 	data := map[string]interface{}{
 		"fids": []string{fid},
 	}
@@ -2467,13 +2532,17 @@ func (qc *QuarkClient) GetDownloadURL(fid string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal download request: %w", err)
 	}
-	respMap, err := qc.makeRequest("POST", FILE_DOWNLOAD, bytes.NewBuffer(jsonData), nil)
+
+	var respMap map[string]interface{}
+	if usePCClient {
+		// 使用桌面客户端 API 绕过下载限制
+		respMap, err = qc.makeRequestPCClient("POST", FILE_DOWNLOAD, bytes.NewBuffer(jsonData), nil)
+	} else {
+		respMap, err = qc.makeRequest("POST", FILE_DOWNLOAD, bytes.NewBuffer(jsonData), nil)
+	}
+
 	if err != nil {
-		errStr := err.Error()
-		if strings.Contains(errStr, "23018") || strings.Contains(errStr, "download file size limit") {
-			return "", fmt.Errorf("超过文件下载大小限制，请使用客户端下载")
-		}
-		return "", fmt.Errorf("download request failed: %w", err)
+		return "", err
 	}
 	code, _ := respMap["code"].(float64)
 	status, _ := respMap["status"].(float64)
@@ -2506,14 +2575,93 @@ func (qc *QuarkClient) GetDownloadURL(fid string) (string, error) {
 			}
 		}
 		if taskID != "" {
-			return qc.waitForDownloadTaskComplete(taskID)
+			return qc.waitForDownloadTaskComplete(taskID, usePCClient)
 		}
 	}
 	return "", fmt.Errorf("download response data is empty or invalid")
 }
 
+// makeRequestPCClient 使用桌面客户端 API 发起请求（可绕过网页版下载限制）
+func (qc *QuarkClient) makeRequestPCClient(method, urlOrEndpoint string, body io.Reader, headers map[string]string) (map[string]interface{}, error) {
+	// 先确保认证有效
+	if err := qc.checkAuth(); err != nil {
+		return nil, err
+	}
+
+	var reqURL string
+	if strings.HasPrefix(urlOrEndpoint, "http://") || strings.HasPrefix(urlOrEndpoint, "https://") {
+		reqURL = urlOrEndpoint
+	} else {
+		reqURL = DRIVE_PC_DOMAIN + urlOrEndpoint
+
+		parsedURL, err := url.Parse(reqURL)
+		if err != nil {
+			return nil, fmt.Errorf("invalid URL: %w", err)
+		}
+
+		query := parsedURL.Query()
+		query.Set("pr", "ucpro")
+		query.Set("fr", "pc")
+		parsedURL.RawQuery = query.Encode()
+		reqURL = parsedURL.String()
+	}
+
+	req, err := http.NewRequest(method, reqURL, body)
+	if err != nil {
+		return nil, fmt.Errorf("create request failed: %w", err)
+	}
+
+	// 设置 cookie
+	cookieParts := make([]string, 0, len(qc.cookies))
+	for k, v := range qc.cookies {
+		cookieParts = append(cookieParts, fmt.Sprintf("%s=%s", k, v))
+	}
+	req.Header.Set("Cookie", strings.Join(cookieParts, "; "))
+
+	// 使用桌面客户端 UA
+	req.Header.Set("User-Agent", UA_PC_CLIENT)
+	req.Header.Set("Accept", "application/json, text/plain, */*")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", "https://pan.quark.cn")
+	req.Header.Set("Referer", "https://pan.quark.cn/")
+
+	// 设置自定义 headers
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+
+	resp, err := qc.HttpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response failed: %w", err)
+	}
+
+	if qc.Debug {
+		fmt.Printf("\n[调试] PC客户端请求: %s %s\n", method, reqURL)
+		fmt.Printf("[调试] 状态码: %d\n", resp.StatusCode)
+		fmt.Printf("[调试] 响应内容: %s\n\n", string(bodyBytes))
+	}
+
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("status %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	var jsonResp map[string]interface{}
+	if err := json.Unmarshal(bodyBytes, &jsonResp); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return jsonResp, nil
+}
+
 // waitForDownloadTaskComplete 轮询下载任务直到完成，返回 download_url
-func (qc *QuarkClient) waitForDownloadTaskComplete(taskID string) (string, error) {
+// usePCClient: 是否使用桌面客户端 API
+func (qc *QuarkClient) waitForDownloadTaskComplete(taskID string, usePCClient bool) (string, error) {
 	const maxRetries = 60
 	retryInterval := 2 * time.Second
 	for i := 0; i < maxRetries; i++ {
@@ -2521,8 +2669,19 @@ func (qc *QuarkClient) waitForDownloadTaskComplete(taskID string) (string, error
 		queryParams := url.Values{}
 		queryParams.Set("task_id", taskID)
 		queryParams.Set("retry_index", "0")
-		reqURL := qc.baseURL + TASK + "?" + queryParams.Encode()
-		respMap, err := qc.makeRequest("GET", reqURL, nil, nil)
+
+		var reqURL string
+		var respMap map[string]interface{}
+		var err error
+
+		if usePCClient {
+			reqURL = DRIVE_PC_DOMAIN + TASK + "?" + queryParams.Encode()
+			respMap, err = qc.makeRequestPCClient("GET", reqURL, nil, nil)
+		} else {
+			reqURL = qc.baseURL + TASK + "?" + queryParams.Encode()
+			respMap, err = qc.makeRequest("GET", reqURL, nil, nil)
+		}
+
 		if err != nil {
 			return "", fmt.Errorf("query download task failed: %w", err)
 		}
