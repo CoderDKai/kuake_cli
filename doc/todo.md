@@ -23,6 +23,7 @@
 - [x] **拆分 UploadFile 函数** (`sdk/file.go:765-1445`)
   - 当前函数超过 600 行，职责过多
   - 已拆分为：`openAndValidateFile`, `parseDestPath`, `ensureDirectoryExists`, `loadOrCreateUploadState`, `calculateFileHash`, `buildUploadStateFunc`, `saveUploadStateWithRetry`, `handleQuickUpload`, `commitUpload` 等小函数
+  - ⚠️ **注意**: 拆分后未经过实际测试，可能存在 bug，建议进行测试验证
 
 - [ ] **统一错误处理模式** (`sdk/file.go` 多处)
   - 当前存在两种错误返回模式混用
