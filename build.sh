@@ -112,3 +112,33 @@ echo "    dist\\kuake-${VERSION}-windows-amd64.exe <command>"
 echo ""
 echo -e "${YELLOW}Note: Binary files and example config file are located in ${BUILD_DIR}/ directory${NC}"
 
+# 打包 skill 文件（包含二进制）
+echo ""
+echo -e "${YELLOW}Packaging skill...${NC}"
+
+SKILL_SRC="skill"
+SKILL_STAGE="${BUILD_DIR}/.skill-stage"
+rm -rf "$SKILL_STAGE"
+mkdir -p "$SKILL_STAGE/kuake-cli/bin"
+
+# 复制 skill 源文件
+cp -r "$SKILL_SRC/scripts" "$SKILL_STAGE/kuake-cli/"
+cp "$SKILL_SRC/SKILL.md" "$SKILL_STAGE/kuake-cli/SKILL.md"
+cp "$SKILL_SRC/config.json" "$SKILL_STAGE/kuake-cli/config.json"
+
+# 复制各平台二进制（去掉版本号）
+cp "${BUILD_DIR}/${PROJECT_NAME}-${VERSION}-linux-amd64"       "$SKILL_STAGE/kuake-cli/bin/kuake-linux-amd64"
+cp "${BUILD_DIR}/${PROJECT_NAME}-${VERSION}-darwin-amd64"      "$SKILL_STAGE/kuake-cli/bin/kuake-darwin-amd64"
+cp "${BUILD_DIR}/${PROJECT_NAME}-${VERSION}-windows-amd64.exe" "$SKILL_STAGE/kuake-cli/bin/kuake-windows-amd64.exe"
+chmod +x "$SKILL_STAGE/kuake-cli/bin/kuake-linux-amd64"
+chmod +x "$SKILL_STAGE/kuake-cli/bin/kuake-darwin-amd64"
+
+# 压缩成 .skill 文件
+(cd "$SKILL_STAGE" && zip -r "../../kuake-cli.skill" "kuake-cli")
+rm -rf "$SKILL_STAGE"
+
+echo -e "${GREEN}✓ Skill packaged: kuake-cli.skill${NC}"
+echo ""
+echo "Skill contents:"
+unzip -l kuake-cli.skill | awk 'NR>3 && /kuake-cli/ {print "  " $4}'
+
