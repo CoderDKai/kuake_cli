@@ -4,13 +4,6 @@ version: 2
 
 project_name: kuake
 
-archives:
-  - id: default
-    format: binary
-    format_overrides:
-      - goos: windows
-        format: exe
-
 builds:
   - id: kuake
     main: ./cmd/main.go
