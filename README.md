@@ -348,6 +348,12 @@ export KUAKE_UPLOAD_PARALLEL=8
 
 ## 变更日志
 
+### v1.3.11
+
+- `download` 命令支持目录递归下载，自动重建本地目录结构
+- 支持断点续传：跳过本地已存在且大小一致的文件
+- 下载结果返回 `total/downloaded/skipped/failed_files` 统计
+
 ### v1.3.10
 
 - 配置文件路径改为 XDG 标准路径 `~/.config/kuake/config.json`，不再依赖可执行文件所在目录
