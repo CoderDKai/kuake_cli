@@ -15,6 +15,11 @@
 
 ## 高优先级 (High)
 
+- [x] **添加 version 命令** (`cmd/main.go`)
+  - CLI 缺少版本查看命令，不方便用户验证安装
+  - 已添加 `kuake version` 子命令，输出 Version 变量
+  - 已更新 `install.sh` 中的验证指令：将 `$FINAL_BIN help` 改为 `$FINAL_BIN version`
+
 - [ ] **拆分 UploadFile 函数** (`sdk/file.go:744-1387`)
   - 当前函数超过 600 行，职责过多
   - 建议拆分为：`prepareUpload`, `ensureDirectoryExists`, `loadOrCreateUploadState`, `performUpload` 等小函数

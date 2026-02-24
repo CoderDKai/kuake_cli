@@ -87,6 +87,13 @@ func main() {
 		os.Exit(ExitError)
 	}
 
+	// version 命令不需要初始化客户端
+	if command == "version" {
+		result := handleVersion()
+		outputJSON(result)
+		os.Exit(ExitSuccess)
+	}
+
 	// 创建客户端
 	var client *sdk.QuarkClient
 	defer func() {
@@ -164,6 +171,7 @@ Options:
   -c, --config <path>    Specify config file path (default: config.json)
 
 Commands:
+  version                       Show version
   user                        Get user information
   list [path]                 List directory (default: "/")
   info <path>                 Get file/folder info
@@ -233,6 +241,18 @@ func outputJSON(result *CLIResult) {
 		output = output[:len(output)-1]
 	}
 	fmt.Println(output)
+}
+
+// handleVersion 处理获取版本信息命令
+func handleVersion() *CLIResult {
+	return &CLIResult{
+		Success: true,
+		Code:    "OK",
+		Message: Version,
+		Data: map[string]interface{}{
+			"version": Version,
+		},
+	}
 }
 
 // handleUserInfo 处理获取用户信息命令

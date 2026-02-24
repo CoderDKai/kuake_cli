@@ -144,7 +144,7 @@ main() {
     echo "=========================================="
     echo "验证安装..."
     echo "=========================================="
-    $FINAL_BIN help >/dev/null 2>&1
+    $FINAL_BIN version >/dev/null 2>&1
     if [ $? -eq 0 ]; then
         echo "安装成功!"
         echo ""
