@@ -20,9 +20,9 @@
   - 已添加 `kuake version` 子命令，输出 Version 变量
   - 已更新 `install.sh` 中的验证指令：将 `$FINAL_BIN help` 改为 `$FINAL_BIN version`
 
-- [ ] **拆分 UploadFile 函数** (`sdk/file.go:744-1387`)
+- [x] **拆分 UploadFile 函数** (`sdk/file.go:765-1445`)
   - 当前函数超过 600 行，职责过多
-  - 建议拆分为：`prepareUpload`, `ensureDirectoryExists`, `loadOrCreateUploadState`, `performUpload` 等小函数
+  - 已拆分为：`openAndValidateFile`, `parseDestPath`, `ensureDirectoryExists`, `loadOrCreateUploadState`, `calculateFileHash`, `buildUploadStateFunc`, `saveUploadStateWithRetry`, `handleQuickUpload`, `commitUpload` 等小函数
 
 - [ ] **统一错误处理模式** (`sdk/file.go` 多处)
   - 当前存在两种错误返回模式混用

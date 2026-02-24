@@ -762,68 +762,59 @@ func (qc *QuarkClient) upFinish(pre *PreUploadResponse) (*FinishResponse, error)
 	return &finishResp, nil
 }
 
-// UploadFile 上传文件到夸克网盘，支持大文件分片上传
-// progressCallback: 进度回调函数，如果为 nil 则不显示进度
-func (qc *QuarkClient) UploadFile(filePath, destPath string, progressCallback func(*UploadProgress)) (*StandardResponse, error) {
+// openAndValidateFile 打开文件并获取文件信息
+func (qc *QuarkClient) openAndValidateFile(filePath string) (*os.File, int64, string, error) {
 	filePath = stripQuotes(filePath)
 	file, err := os.Open(filePath)
 	if err != nil {
-		return &StandardResponse{
-			Success: false,
-			Code:    "FILE_OPEN_ERROR",
-			Message: fmt.Sprintf("failed to open file: %v", err),
-			Data:    nil,
-		}, nil
+		return nil, 0, "", fmt.Errorf("failed to open file: %w", err)
 	}
-	defer file.Close()
 
 	fileInfo, err := file.Stat()
 	if err != nil {
-		return &StandardResponse{
-			Success: false,
-			Code:    "FILE_INFO_ERROR",
-			Message: fmt.Sprintf("failed to get file info: %v", err),
-			Data:    nil,
-		}, nil
+		file.Close()
+		return nil, 0, "", fmt.Errorf("failed to get file info: %w", err)
 	}
 
-	fileSize := fileInfo.Size()
-	localFileName := fileInfo.Name()
+	return file, fileInfo.Size(), fileInfo.Name(), nil
+}
 
-	// 记录开始时间，用于计算速度和剩余时间
-	startTime := time.Now()
-
+// parseDestPath 解析目标路径，返回目录路径和文件名
+func parseDestPath(destPath, localFileName string) (dirPath, fileName string) {
 	destPath = normalizePath(destPath)
-	var destFileName string
 	if strings.HasSuffix(destPath, "/") || filepath.Base(destPath) == "" || filepath.Base(destPath) == "." {
 		destPath = strings.TrimSuffix(destPath, "/") + "/" + localFileName
-		destFileName = localFileName
+		fileName = localFileName
 	} else {
-		destFileName = filepath.Base(destPath)
+		fileName = filepath.Base(destPath)
 	}
 
-	destDirPath := destPath
-	if destDirPath == "/" || destDirPath == "" {
-		destDirPath = "/"
+	dirPath = destPath
+	if dirPath == "/" || dirPath == "" {
+		dirPath = "/"
 	} else {
-		lastSlash := strings.LastIndex(destDirPath, "/")
+		lastSlash := strings.LastIndex(dirPath, "/")
 		if lastSlash == 0 {
-			destDirPath = "/"
+			dirPath = "/"
 		} else if lastSlash > 0 {
-			destDirPath = destDirPath[:lastSlash]
+			dirPath = dirPath[:lastSlash]
 		} else {
-			destDirPath = "/"
+			dirPath = "/"
 		}
 	}
-	destDirPath = normalizePath(destDirPath)
+	dirPath = normalizePath(dirPath)
+	return dirPath, fileName
+}
 
-	if destDirPath != "/" && destDirPath != "" && destDirPath != "." {
-		destDirInfo, err := qc.GetFileInfo(destDirPath)
+// ensureDirectoryExists 确保目标目录存在，如不存在则创建
+func (qc *QuarkClient) ensureDirectoryExists(dirPath string) (string, error) {
+	if dirPath != "/" && dirPath != "" && dirPath != "." {
+		destDirInfo, err := qc.GetFileInfo(dirPath)
 		needCreate := err != nil || (destDirInfo != nil && !destDirInfo.Success && destDirInfo.Code == "FILE_NOT_FOUND")
 		if needCreate {
-			parts := strings.Split(strings.Trim(destDirPath, "/"), "/")
+			parts := strings.Split(strings.Trim(dirPath, "/"), "/")
 			currentPath := ""
-			var lastCreatedFid string // 记录最后创建的目录 FID
+			var lastCreatedFid string
 			for _, part := range parts {
 				if part == "" {
 					continue
@@ -845,26 +836,15 @@ func (qc *QuarkClient) UploadFile(filePath, destPath string, progressCallback fu
 					}
 					createResp, createErr := qc.CreateFolder(part, parentPathForCreate)
 					if createErr != nil {
-						return &StandardResponse{
-							Success: false,
-							Code:    "CREATE_DIRECTORY_ERROR",
-							Message: fmt.Sprintf("failed to create directory %s: %v", currentPath, createErr),
-							Data:    nil,
-						}, nil
+						return "", fmt.Errorf("failed to create directory %s: %w", currentPath, createErr)
 					}
 					if createResp == nil || !createResp.Success {
 						msg := "unknown error"
 						if createResp != nil {
 							msg = createResp.Message
 						}
-						return &StandardResponse{
-							Success: false,
-							Code:    "CREATE_DIRECTORY_ERROR",
-							Message: fmt.Sprintf("failed to create directory %s: %s", currentPath, msg),
-							Data:    nil,
-						}, nil
+						return "", fmt.Errorf("failed to create directory %s: %s", currentPath, msg)
 					}
-					// 如果创建成功，从返回的 Data 中获取 FID
 					if createResp.Data != nil {
 						if fid, ok := createResp.Data["fid"].(string); ok && fid != "" {
 							lastCreatedFid = fid
@@ -872,66 +852,33 @@ func (qc *QuarkClient) UploadFile(filePath, destPath string, progressCallback fu
 					}
 				}
 			}
-			// 如果创建了目录并获取到了 FID，直接使用 FID，否则再次查询路径
 			if lastCreatedFid != "" {
-				destDirPath = lastCreatedFid
-				destDirInfo = &StandardResponse{
-					Success: true,
-					Code:    "OK",
-					Message: "Directory created",
-					Data:    map[string]interface{}{"fid": lastCreatedFid},
-				}
-			} else {
-				destDirInfo, err = qc.GetFileInfo(destDirPath)
-				if err != nil {
-					return &StandardResponse{
-						Success: false,
-						Code:    "GET_DIRECTORY_INFO_ERROR",
-						Message: fmt.Sprintf("failed to get destination directory info: %v", err),
-						Data:    nil,
-					}, nil
-				}
+				return lastCreatedFid, nil
+			}
+			destDirInfo, err = qc.GetFileInfo(dirPath)
+			if err != nil {
+				return "", fmt.Errorf("failed to get destination directory info: %w", err)
 			}
 		}
 		if !destDirInfo.Success {
-			return &StandardResponse{
-				Success: false,
-				Code:    destDirInfo.Code,
-				Message: fmt.Sprintf("failed to get destination directory: %s", destDirInfo.Message),
-				Data:    nil,
-			}, nil
+			return "", fmt.Errorf("failed to get destination directory: %s", destDirInfo.Message)
 		}
 		fid, ok := destDirInfo.Data["fid"].(string)
 		if !ok || fid == "" {
-			return &StandardResponse{
-				Success: false,
-				Code:    "INVALID_DIRECTORY_INFO",
-				Message: "destination directory info is invalid: fid not found or empty",
-				Data:    nil,
-			}, nil
+			return "", fmt.Errorf("destination directory info is invalid: fid not found or empty")
 		}
-		destDirPath = fid
-	} else {
-		destDirPath = "0"
+		return fid, nil
 	}
+	return "0", nil
+}
 
-	mimeType := mime.TypeByExtension(filepath.Ext(destFileName))
-	if mimeType == "" {
-		mimeType = "application/octet-stream"
-	}
-
-	// 先检查是否有保存的上传状态（断点续传）
+// loadOrCreateUploadState 加载或创建上传状态（断点续传）
+func loadOrCreateUploadState(filePath, destPath string, fileSize int64) (*UploadState, *PreUploadResponse, bool, error) {
 	statePath := getUploadStatePath(filePath, destPath)
-	var savedState *UploadState
-	var pre *PreUploadResponse
-	var useSavedState bool
 
-	// 尝试加载保存的上传状态
 	if state, loadErr := loadUploadState(statePath); loadErr == nil {
-		// 验证状态是否有效：文件路径、大小、目标路径是否匹配
 		if state.FilePath == filePath && state.DestPath == destPath && state.FileSize == fileSize {
-			// 尝试使用保存的状态，构建 PreUploadResponse
-			pre = &PreUploadResponse{
+			pre := &PreUploadResponse{
 				Code:   0,
 				Status: 200,
 			}
@@ -943,16 +890,196 @@ func (qc *QuarkClient) UploadFile(filePath, destPath string, progressCallback fu
 			pre.Data.AuthInfo = state.AuthInfo
 			pre.Data.Callback = state.Callback
 			pre.Metadata.PartSize = state.PartSize
-
-			// 验证 uploadId 是否仍然有效：尝试上传一个空分片或查询分片列表
-			// 由于没有查询 API，我们直接尝试使用，如果失败再重新获取
-			useSavedState = true
-			savedState = state
-			// HashCtx 会在后续的上传循环中从 savedState 恢复
-		} else {
-			// 文件不匹配，删除旧状态
-			deleteUploadState(statePath)
+			return state, pre, true, nil
 		}
+		deleteUploadState(statePath)
+	}
+	return nil, nil, false, nil
+}
+
+// calculateFileHash 计算文件的 MD5 和 SHA1 哈希
+func calculateFileHash(file *os.File) (string, string, error) {
+	file.Seek(0, 0)
+	md5Hash := md5.New()
+	sha1Hash := sha1.New()
+	multiWriter := io.MultiWriter(md5Hash, sha1Hash)
+
+	if _, err := io.Copy(multiWriter, file); err != nil {
+		return "", "", fmt.Errorf("failed to calculate hash: %w", err)
+	}
+
+	md5Sum := fmt.Sprintf("%x", md5Hash.Sum(nil))
+	sha1Sum := fmt.Sprintf("%x", sha1Hash.Sum(nil))
+	return md5Sum, sha1Sum, nil
+}
+
+// buildUploadStateFunc 构建上传状态的工厂函数
+func buildUploadStateFunc(filePath, destPath string, fileSize int64, pre *PreUploadResponse, partSize int64, mimeType string) *UploadState {
+	return &UploadState{
+		FilePath:      filePath,
+		DestPath:      destPath,
+		FileSize:      fileSize,
+		UploadID:      pre.Data.UploadID,
+		TaskID:        pre.Data.TaskID,
+		Bucket:        pre.Data.Bucket,
+		ObjKey:        pre.Data.ObjKey,
+		UploadURL:     pre.Data.UploadURL,
+		PartSize:      partSize,
+		UploadedParts: make(map[int]string),
+		MimeType:      mimeType,
+		AuthInfo:      pre.Data.AuthInfo,
+		Callback:      pre.Data.Callback,
+		HashCtx:       nil,
+	}
+}
+
+// saveUploadStateWithRetry 保存上传状态，带重试
+func saveUploadStateWithRetry(statePath string, state *UploadState) {
+	maxRetries := 3
+	for i := 0; i < maxRetries; i++ {
+		if err := saveUploadState(statePath, state); err != nil {
+			if i == maxRetries-1 {
+				log.Printf("Warning: failed to save upload state after %d retries: %v", maxRetries, err)
+			}
+		} else {
+			break
+		}
+	}
+}
+
+// handleQuickUpload 处理秒传成功的场景
+func handleQuickUpload(finish *FinishResponse, fileSize int64, startTime time.Time, progressCallback func(*UploadProgress), statePath string) (*StandardResponse, error) {
+	if progressCallback != nil {
+		elapsed := time.Since(startTime)
+		progressInfo := &UploadProgress{
+			Progress:     100,
+			Uploaded:     fileSize,
+			Total:        fileSize,
+			Speed:        0,
+			SpeedStr:     "秒传（文件已存在）",
+			Remaining:    0,
+			RemainingStr: "0s",
+			Elapsed:      elapsed,
+		}
+		progressCallback(progressInfo)
+	}
+	deleteUploadState(statePath)
+	responseData := make(map[string]interface{})
+	for k, v := range finish.Data {
+		if k != "preview_url" {
+			responseData[k] = v
+		}
+	}
+	return &StandardResponse{
+		Success: true,
+		Code:    "OK",
+		Message: "上传完成",
+		Data:    responseData,
+	}, nil
+}
+
+// commitUpload 提交上传
+func (qc *QuarkClient) commitUpload(pre *PreUploadResponse, etags []string, statePath string) (*StandardResponse, error) {
+	finish, err := qc.upCommit(pre, etags)
+	if err != nil {
+		return &StandardResponse{
+			Success: false,
+			Code:    "COMMIT_UPLOAD_ERROR",
+			Message: fmt.Sprintf("commit upload failed: %v", err),
+			Data:    nil,
+		}, nil
+	}
+
+	if finish.Code == 0 && finish.Status == 200 {
+		finishResp, err := qc.upFinish(pre)
+		if err != nil {
+			return &StandardResponse{
+				Success: false,
+				Code:    "FINISH_UPLOAD_ERROR",
+				Message: fmt.Sprintf("finish upload failed: %v", err),
+				Data:    nil,
+			}, nil
+		}
+		if finishResp.Code != 0 || finishResp.Status != 200 {
+			return &StandardResponse{
+				Success: false,
+				Code:    "FINISH_UPLOAD_ERROR",
+				Message: fmt.Sprintf("finish upload failed: code=%d, status=%d", finishResp.Code, finishResp.Status),
+				Data:    nil,
+			}, nil
+		}
+
+		deleteUploadState(statePath)
+		responseData := make(map[string]interface{})
+		for k, v := range finishResp.Data {
+			if k != "preview_url" {
+				responseData[k] = v
+			}
+		}
+		return &StandardResponse{
+			Success: true,
+			Code:    "OK",
+			Message: "上传完成",
+			Data:    responseData,
+		}, nil
+	}
+
+	return &StandardResponse{
+		Success: false,
+		Code:    "COMMIT_UPLOAD_ERROR",
+		Message: fmt.Sprintf("commit upload failed: code=%d, status=%d", finish.Code, finish.Status),
+		Data:    nil,
+	}, nil
+}
+
+// UploadFile 上传文件到夸克网盘，支持大文件分片上传
+// progressCallback: 进度回调函数，如果为 nil 则不显示进度
+func (qc *QuarkClient) UploadFile(filePath, destPath string, progressCallback func(*UploadProgress)) (*StandardResponse, error) {
+	// 1. 打开并验证文件
+	file, fileSize, localFileName, err := qc.openAndValidateFile(filePath)
+	if err != nil {
+		return &StandardResponse{
+			Success: false,
+			Code:    "FILE_OPEN_ERROR",
+			Message: err.Error(),
+			Data:    nil,
+		}, nil
+	}
+	defer file.Close()
+
+	// 记录开始时间，用于计算速度和剩余时间
+	startTime := time.Now()
+
+	// 2. 解析目标路径
+	destDirPath, destFileName := parseDestPath(destPath, localFileName)
+
+	// 3. 确保目标目录存在
+	destDirPath, err = qc.ensureDirectoryExists(destDirPath)
+	if err != nil {
+		return &StandardResponse{
+			Success: false,
+			Code:    "CREATE_DIRECTORY_ERROR",
+			Message: err.Error(),
+			Data:    nil,
+		}, nil
+	}
+
+	// 4. 确定 MIME 类型
+	mimeType := mime.TypeByExtension(filepath.Ext(destFileName))
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+
+	// 5. 加载或创建上传状态（断点续传）
+	statePath := getUploadStatePath(filePath, destPath)
+	savedState, pre, useSavedState, err := loadOrCreateUploadState(filePath, destPath, fileSize)
+	if err != nil {
+		return &StandardResponse{
+			Success: false,
+			Code:    "LOAD_STATE_ERROR",
+			Message: err.Error(),
+			Data:    nil,
+		}, nil
 	}
 
 	// 如果没有保存的状态或状态无效，调用 upPre 获取新的上传信息
@@ -1019,6 +1146,7 @@ func (qc *QuarkClient) UploadFile(filePath, destPath string, progressCallback fu
 		}
 	}
 
+	// 7. 检查是否秒传
 	if hashResp.Data.Finish {
 		finish, err := qc.upFinish(pre)
 		if err != nil {
@@ -1037,35 +1165,7 @@ func (qc *QuarkClient) UploadFile(filePath, destPath string, progressCallback fu
 				Data:    nil,
 			}, nil
 		}
-		if progressCallback != nil {
-			elapsed := time.Since(startTime)
-			// 秒传：文件已存在于服务器，无需实际上传
-			progressInfo := &UploadProgress{
-				Progress:     100,
-				Uploaded:     fileSize,
-				Total:        fileSize,
-				Speed:        0,
-				SpeedStr:     "秒传（文件已存在）",
-				Remaining:    0,
-				RemainingStr: "0s",
-				Elapsed:      elapsed,
-			}
-			progressCallback(progressInfo)
-		}
-		// 删除状态文件（如果存在）
-		deleteUploadState(statePath)
-		responseData := make(map[string]interface{})
-		for k, v := range finish.Data {
-			if k != "preview_url" {
-				responseData[k] = v
-			}
-		}
-		return &StandardResponse{
-			Success: true,
-			Code:    "OK",
-			Message: "上传完成",
-			Data:    responseData,
-		}, nil
+		return handleQuickUpload(finish, fileSize, startTime, progressCallback, statePath)
 	}
 
 	partSize := pre.Metadata.PartSize
@@ -1386,62 +1486,7 @@ func (qc *QuarkClient) UploadFile(filePath, destPath string, progressCallback fu
 	}
 
 	// 10. 提交上传
-	finish, err := qc.upCommit(pre, etags)
-	if err != nil {
-		return &StandardResponse{
-			Success: false,
-			Code:    "COMMIT_UPLOAD_ERROR",
-			Message: fmt.Sprintf("commit upload failed: %v", err),
-			Data:    nil,
-		}, nil
-	}
-
-	// OSS commit 成功后，需要调用 upFinish 通知夸克服务器
-	if finish.Code == 0 && finish.Status == 200 {
-		// 调用 upFinish 确认上传完成
-		finishResp, err := qc.upFinish(pre)
-		if err != nil {
-			return &StandardResponse{
-				Success: false,
-				Code:    "FINISH_UPLOAD_ERROR",
-				Message: fmt.Sprintf("finish upload failed: %v", err),
-				Data:    nil,
-			}, nil
-		}
-		if finishResp.Code != 0 || finishResp.Status != 200 {
-			return &StandardResponse{
-				Success: false,
-				Code:    "FINISH_UPLOAD_ERROR",
-				Message: fmt.Sprintf("finish upload failed: code=%d, status=%d", finishResp.Code, finishResp.Status),
-				Data:    nil,
-			}, nil
-		}
-
-		// 上传成功，删除状态文件
-		deleteUploadState(statePath)
-
-		// 移除 preview_url 字段
-		responseData := make(map[string]interface{})
-		for k, v := range finishResp.Data {
-			if k != "preview_url" {
-				responseData[k] = v
-			}
-		}
-		return &StandardResponse{
-			Success: true,
-			Code:    "OK",
-			Message: "上传完成",
-			Data:    responseData,
-		}, nil
-	}
-
-	// 如果 commit 失败
-	return &StandardResponse{
-		Success: false,
-		Code:    "COMMIT_UPLOAD_ERROR",
-		Message: fmt.Sprintf("commit upload failed: code=%d, status=%d", finish.Code, finish.Status),
-		Data:    nil,
-	}, nil
+	return qc.commitUpload(pre, etags, statePath)
 }
 
 // CreateFolder 创建文件夹
