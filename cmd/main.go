@@ -321,16 +321,15 @@ func handleLogin(args []string) *CLIResult {
 		}
 	}
 
-	// 获取可执行文件所在目录
-	execDir, err := sdk.GetExecutableDir()
+	// 获取用户 home 目录，构造 XDG 配置路径
+	home, err := os.UserHomeDir()
 	if err != nil {
 		return &CLIResult{
 			Success: false,
-			Message: fmt.Sprintf("获取可执行文件目录失败: %v", err),
+			Message: fmt.Sprintf("获取用户目录失败: %v", err),
 		}
 	}
-
-	configPath := filepath.Join(execDir, "config.json")
+	configPath := filepath.Join(home, ".config", "kuake", "config.json")
 
 	// 检查配置文件是否存在
 	var config sdk.Config

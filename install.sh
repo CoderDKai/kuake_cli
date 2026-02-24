@@ -126,11 +126,6 @@ main() {
 
     echo "安装二进制文件..."
 
-    # 系统级安装目录: /usr/local/lib/kuake/
-    # 用户级安装目录: ~/.kuake/
-    SYSTEM_KUAKE_DIR="/usr/local/lib/kuake"
-    USER_KUAKE_DIR="$HOME/.kuake"
-
     if [ "$OS" = "windows" ]; then
         BIN_NAME="${BINARY_NAME}.exe"
     else
@@ -138,71 +133,44 @@ main() {
     fi
 
     # 尝试系统级安装（需要 sudo）
-    if sudo mkdir -p "$SYSTEM_KUAKE_DIR" && \
-       sudo cp "$BINARY_PATH" "${SYSTEM_KUAKE_DIR}/${BIN_NAME}"; then
+    if sudo cp "$BINARY_PATH" "/usr/local/bin/${BIN_NAME}" 2>/dev/null && \
+       sudo chmod +x "/usr/local/bin/${BIN_NAME}" 2>/dev/null; then
 
-        KUAKE_DIR="$SYSTEM_KUAKE_DIR"
-        sudo chmod +x "${KUAKE_DIR}/${BIN_NAME}"
-
-        # 创建软链接到 /usr/local/bin
-        sudo ln -sf "${KUAKE_DIR}/${BIN_NAME}" "/usr/local/bin/${BIN_NAME}"
         FINAL_BIN="/usr/local/bin/${BIN_NAME}"
-
-        # 使用 sudo 写入配置文件，并将所有权转给当前用户（确保 kuake login 可写）
-        echo "创建默认配置文件..."
-        write_default_config "${TEMP_DIR}/config.json"
-        sudo cp "${TEMP_DIR}/config.json" "${KUAKE_DIR}/config.json"
-        sudo chown "$(id -u):$(id -g)" "${KUAKE_DIR}/config.json"
-        sudo chmod 644 "${KUAKE_DIR}/config.json"
-
         SYSTEM_INSTALL=true
     else
         # 用户级安装（无需 sudo）
-        KUAKE_DIR="$USER_KUAKE_DIR"
-        mkdir -p "$KUAKE_DIR"
-        cp "$BINARY_PATH" "${KUAKE_DIR}/${BIN_NAME}"
-        chmod +x "${KUAKE_DIR}/${BIN_NAME}"
-
-        # 创建软链接到 ~/.local/bin
         mkdir -p "$HOME/.local/bin"
-        ln -sf "${KUAKE_DIR}/${BIN_NAME}" "$HOME/.local/bin/${BIN_NAME}"
+        cp "$BINARY_PATH" "$HOME/.local/bin/${BIN_NAME}"
+        chmod +x "$HOME/.local/bin/${BIN_NAME}"
         FINAL_BIN="$HOME/.local/bin/${BIN_NAME}"
-
-        # 写入配置文件
-        echo "创建默认配置文件..."
-        write_default_config "${KUAKE_DIR}/config.json"
-
         SYSTEM_INSTALL=false
     fi
+
+    # 配置文件统一写到 ~/.config/kuake/config.json
+    echo "创建默认配置文件..."
+    mkdir -p "$HOME/.config/kuake"
+    write_default_config "$HOME/.config/kuake/config.json"
 
     # 清理临时目录
     rm -rf "$TEMP_DIR"
 
-    # 验证安装：先验证实际二进制，再验证软链接
+    # 验证安装
     echo ""
     echo "=========================================="
     echo "验证安装..."
     echo "=========================================="
 
-    # 验证实际二进制文件
-    if ! "${KUAKE_DIR}/${BIN_NAME}" version >/dev/null 2>&1; then
-        echo "错误: 二进制文件无法运行: ${KUAKE_DIR}/${BIN_NAME}"
-        echo "错误详情: $("${KUAKE_DIR}/${BIN_NAME}" version 2>&1 || true)"
+    if "$FINAL_BIN" version >/dev/null 2>&1; then
+        echo "安装成功!"
+    else
+        echo "错误: 二进制无法运行，详情: $("$FINAL_BIN" version 2>&1 || true)"
         exit 1
     fi
 
-    # 验证软链接是否正常
-    if ! "$FINAL_BIN" version >/dev/null 2>&1; then
-        echo "警告: 软链接异常，但程序已安装到 ${KUAKE_DIR}/${BIN_NAME}"
-        echo "请手动将其加入 PATH 或运行: ${KUAKE_DIR}/${BIN_NAME} login"
-        exit 1
-    fi
-
-    echo "安装成功!"
     echo ""
-    echo "程序目录: $KUAKE_DIR"
     echo "可执行文件: $FINAL_BIN"
-    echo "配置文件: ${KUAKE_DIR}/config.json"
+    echo "配置文件: $HOME/.config/kuake/config.json"
 
     if [ "$SYSTEM_INSTALL" = false ]; then
         echo ""
@@ -214,7 +182,7 @@ main() {
     echo "=========================================="
     echo "登录夸克网盘"
     echo "=========================================="
-    if "${KUAKE_DIR}/${BIN_NAME}" login; then
+    if "$FINAL_BIN" login; then
         echo ""
         echo "登录成功！现在可以使用 kuake 命令操作夸克网盘。"
     else

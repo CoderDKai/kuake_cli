@@ -23,37 +23,33 @@ func GetExecutableDir() (string, error) {
 
 // resolveConfigPath 解析配置文件路径
 // 如果是绝对路径，则直接使用
-// 如果是相对路径，优先相对于当前工作目录，如果不存在则相对于可执行文件所在目录
+// 如果是相对路径，优先相对于当前工作目录（文件存在时），否则 fallback 到 ~/.config/kuake/config.json
 func resolveConfigPath(configPath string) (string, error) {
 	// 如果是绝对路径，直接返回
 	if filepath.IsAbs(configPath) {
 		return configPath, nil
 	}
 
-	// 相对路径，优先使用当前工作目录
-	// 这对于开发模式（go run）和正常使用都更友好
-	cwd, err := os.Getwd()
-	if err == nil {
-		// 尝试当前工作目录下的路径
+	// 相对路径，优先使用当前工作目录（文件存在时）
+	cwd, _ := os.Getwd()
+	if cwd != "" {
 		cwdPath := filepath.Join(cwd, configPath)
-		if _, statErr := os.Stat(cwdPath); statErr == nil {
-			// 文件存在，使用当前工作目录的路径
+		if _, err := os.Stat(cwdPath); err == nil {
 			return cwdPath, nil
 		}
 	}
 
-	// 如果当前工作目录下不存在，尝试相对于可执行文件所在目录
-	execDir, err := GetExecutableDir()
-	if err != nil {
-		// 如果获取可执行文件目录失败，回退到当前工作目录
-		if cwd != "" {
-			return filepath.Join(cwd, configPath), nil
-		}
-		return "", fmt.Errorf("failed to get executable directory: %w", err)
-	}
+	// fallback：~/.config/kuake/config.json
+	return xdgConfigPath()
+}
 
-	// 拼接路径（即使文件可能不存在，也返回路径，让调用者处理文件不存在的错误）
-	return filepath.Join(execDir, configPath), nil
+// xdgConfigPath 返回 XDG 标准配置文件路径 ~/.config/kuake/config.json
+func xdgConfigPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to get home directory: %w", err)
+	}
+	return filepath.Join(home, ".config", "kuake", "config.json"), nil
 }
 
 // LoadConfig 从配置文件加载配置
@@ -110,6 +106,11 @@ func SaveConfig(configPath string, config *Config) error {
 	data, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal config: %w", err)
+	}
+
+	// 写入前确保目录存在
+	if err := os.MkdirAll(filepath.Dir(resolvedPath), 0755); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
 	// 写入文件
