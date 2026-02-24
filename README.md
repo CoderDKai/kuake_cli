@@ -21,6 +21,10 @@
 - [功能特性](#-功能特性)
 - [系统要求](#-系统要求)
 - [安装](#-安装)
+  - [一键安装（推荐）](#一键安装推荐)
+  - [Claude Code Skill](#claude-code-skill)
+  - [从源码构建](#从源码构建)
+  - [下载预编译二进制文件](#下载预编译二进制文件)
 - [快速开始](#-快速开始)
 - [配置说明](#-配置说明)
 - [CLI 工具使用](#-cli-工具使用)
@@ -48,6 +52,54 @@
 - 有效的夸克网盘账号和 Cookie
 
 ## 安装
+
+### 一键安装（推荐）
+
+**Linux/macOS**:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/CoderDKai/kuake_cli/main/install.sh | bash
+```
+
+安装完成后，运行以下命令登录：
+
+```bash
+kuake login
+```
+
+或通过 `-t` 参数直接传入 token：
+
+```bash
+kuake login -t YOUR_TOKEN
+```
+
+### Claude Code Skill
+
+如果你使用 [Claude Code](https://claude.ai/code)，可以安装 `kuake-cli.skill`，通过自然语言操作夸克网盘。
+
+**下载 Skill 文件**：
+
+从 [Releases](https://github.com/CoderDKai/kuake_cli/releases) 页面或仓库根目录下载 `kuake-cli.skill`。
+
+**用户级安装（所有项目可用）**：
+
+```bash
+unzip kuake-cli.skill -d ~/.claude/skills/
+```
+
+**项目级安装（仅当前项目）**：
+
+```bash
+unzip kuake-cli.skill -d .claude/skills/
+```
+
+安装后在 Claude Code 中直接输入：
+
+```
+/kuake-cli [命令]
+```
+
+Claude 也会根据上下文自动识别并调用该技能。
 
 ### 从源码构建
 
