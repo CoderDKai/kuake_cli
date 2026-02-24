@@ -1,5 +1,6 @@
 # .goreleaser.yml
 # 构建配置
+version: 2
 
 project_name: kuake
 
