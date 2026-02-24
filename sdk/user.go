@@ -43,20 +43,29 @@ func (qc *QuarkClient) GetUserInfo() (*StandardResponse, error) {
 
 	// 检查 success 字段
 	success, ok := jsonResp["success"].(bool)
-	message, ok := jsonResp["msg"].(string)
+	message, msgOk := jsonResp["msg"].(string)
 	code, _ := jsonResp["code"].(string)
-	if ok && !success {
+
+	// 检查 data 字段是否存在且有效
+	data, dataOk := jsonResp["data"].(map[string]interface{})
+
+	// 如果 success 字段明确为 false，或者 data 不存在/为空，则认为是失败
+	if (ok && !success) || !dataOk || data == nil || len(data) == 0 {
+		errMsg := "登录失败，请检查 Token 是否正确"
+		if msgOk && message != "" {
+			errMsg = message
+		}
 		return &StandardResponse{
-			Success: success,
+			Success: false,
 			Code:    code,
-			Message: fmt.Sprintf("API returned: %s", message),
-		}, nil
-	} else {
-		return &StandardResponse{
-			Success: success,
-			Code:    code,
-			Message: "get user info success",
-			Data:    jsonResp["data"].(map[string]interface{}),
+			Message: errMsg,
 		}, nil
 	}
+
+	return &StandardResponse{
+		Success: true,
+		Code:    code,
+		Message: "get user info success",
+		Data:    data,
+	}, nil
 }

@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 )
 
-// getExecutableDir 获取可执行文件所在的目录
-func getExecutableDir() (string, error) {
+// GetExecutableDir 获取可执行文件所在的目录
+func GetExecutableDir() (string, error) {
 	execPath, err := os.Executable()
 	if err != nil {
 		return "", fmt.Errorf("failed to get executable path: %w", err)
@@ -43,7 +43,7 @@ func resolveConfigPath(configPath string) (string, error) {
 	}
 
 	// 如果当前工作目录下不存在，尝试相对于可执行文件所在目录
-	execDir, err := getExecutableDir()
+	execDir, err := GetExecutableDir()
 	if err != nil {
 		// 如果获取可执行文件目录失败，回退到当前工作目录
 		if cwd != "" {

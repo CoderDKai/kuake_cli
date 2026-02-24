@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -94,6 +95,16 @@ func main() {
 		os.Exit(ExitSuccess)
 	}
 
+	// login 命令只需要配置文件，不需要初始化客户端
+	if command == "login" {
+		result := handleLogin(args)
+		outputJSON(result)
+		if !result.Success {
+			os.Exit(ExitError)
+		}
+		os.Exit(ExitSuccess)
+	}
+
 	// 创建客户端
 	var client *sdk.QuarkClient
 	defer func() {
@@ -172,7 +183,8 @@ Options:
 
 Commands:
   version                       Show version
-  user                        Get user information
+  login [-t token]              Login with token (interactive or -t/--token)
+  user                          Get user information
   list [path]                 List directory (default: "/")
   info <path>                 Get file/folder info
   download <path> [dest]      Get file download URL, or download to local file if dest given
@@ -199,6 +211,9 @@ Commands:
   help                           Show help
 
 Examples:
+  kuake version
+  kuake login
+  kuake login -t "YOUR_TOKEN"
   kuake user
   kuake list "/"
   kuake info "/file.txt"
@@ -251,6 +266,123 @@ func handleVersion() *CLIResult {
 		Message: Version,
 		Data: map[string]interface{}{
 			"version": Version,
+		},
+	}
+}
+
+// handleLogin 处理登录命令
+// 支持两种方式：
+// 1. 交互式输入：kuake login （会提示用户输入 token）
+// 2. 命令行参数：kuake login -t YOUR_TOKEN
+func handleLogin(args []string) *CLIResult {
+	var token string
+
+	// 解析参数
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "-t", "--token":
+			if i+1 >= len(args) {
+				return &CLIResult{
+					Success: false,
+					Code:    "INVALID_ARGS",
+					Message: "missing value for -t/--token",
+				}
+			}
+			token = strings.TrimSpace(args[i+1])
+			i++
+		default:
+			return &CLIResult{
+				Success: false,
+				Code:    "INVALID_ARGS",
+				Message: fmt.Sprintf("unknown argument: %s", args[i]),
+			}
+		}
+	}
+
+	// 如果没有通过参数传入 token，交互式提示用户输入
+	if token == "" {
+		fmt.Print("请输入 Token: ")
+		reader := bufio.NewReader(os.Stdin)
+		input, err := reader.ReadString('\n')
+		if err != nil {
+			return &CLIResult{
+				Success: false,
+				Message: fmt.Sprintf("读取输入失败: %v", err),
+			}
+		}
+		token = strings.TrimSpace(input)
+	}
+
+	if token == "" {
+		return &CLIResult{
+			Success: false,
+			Code:    "EMPTY_TOKEN",
+			Message: "Token 不能为空",
+		}
+	}
+
+	// 获取可执行文件所在目录
+	execDir, err := sdk.GetExecutableDir()
+	if err != nil {
+		return &CLIResult{
+			Success: false,
+			Message: fmt.Sprintf("获取可执行文件目录失败: %v", err),
+		}
+	}
+
+	configPath := filepath.Join(execDir, "config.json")
+
+	// 检查配置文件是否存在
+	var config sdk.Config
+	if _, err := os.Stat(configPath); err == nil {
+		// 文件存在，读取现有配置
+		data, err := os.ReadFile(configPath)
+		if err != nil {
+			return &CLIResult{
+				Success: false,
+				Message: fmt.Sprintf("读取配置文件失败: %v", err),
+			}
+		}
+		if err := json.Unmarshal(data, &config); err != nil {
+			// 配置文件格式错误，创建新的
+			config = sdk.Config{}
+			config.Quark.AccessTokens = []string{}
+		}
+	} else {
+		// 文件不存在，创建新的
+		config = sdk.Config{}
+		config.Quark.AccessTokens = []string{}
+	}
+
+	// 检查 token 是否已存在
+	tokenExists := false
+	for _, t := range config.Quark.AccessTokens {
+		if t == token {
+			tokenExists = true
+			break
+		}
+	}
+
+	// 如果 token 不存在，添加到数组
+	if !tokenExists {
+		config.Quark.AccessTokens = append(config.Quark.AccessTokens, token)
+	}
+
+	// 保存配置
+	if err := sdk.SaveConfig(configPath, &config); err != nil {
+		return &CLIResult{
+			Success: false,
+			Message: fmt.Sprintf("保存配置文件失败: %v", err),
+		}
+	}
+
+	return &CLIResult{
+		Success: true,
+		Code:    "OK",
+		Message: "登录成功",
+		Data: map[string]interface{}{
+			"config_path": configPath,
+			"token_count": len(config.Quark.AccessTokens),
 		},
 	}
 }

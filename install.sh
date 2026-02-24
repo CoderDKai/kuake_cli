@@ -136,6 +136,21 @@ main() {
         FINAL_BIN="${TARGET_DIR}/${BINARY_NAME}"
     fi
 
+    # 创建默认配置文件
+    echo "创建默认配置文件..."
+    cat > "${TARGET_DIR}/config.json" << 'EOF'
+{
+  "quark": {
+    "access_tokens": []
+  }
+}
+EOF
+    if [ "$OS" = "windows" ]; then
+        sudo chmod +x "${TARGET_DIR}/config.json" 2>/dev/null || chmod +x "${TARGET_DIR}/config.json"
+    else
+        sudo chmod +x "${TARGET_DIR}/config.json" 2>/dev/null || chmod +x "${TARGET_DIR}/config.json"
+    fi
+
     # 清理临时目录
     rm -rf "$TEMP_DIR"
 
@@ -153,6 +168,15 @@ main() {
             echo ""
             echo "注意: 安装到用户目录，请确保 $HOME/.local/bin 在 PATH 中"
         fi
+        echo ""
+        echo "=========================================="
+        echo "下一步: 请运行以下命令登录"
+        echo "=========================================="
+        echo "  kuake login"
+        echo ""
+        echo "或者通过命令行传入 token:"
+        echo "  kuake login -t YOUR_TOKEN"
+        echo ""
     else
         echo "警告: 安装验证失败，但文件已安装到 $FINAL_BIN"
     fi
