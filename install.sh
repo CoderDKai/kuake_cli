@@ -65,6 +65,18 @@ get_download_url() {
         sed -E 's/.*"(https[^"]+)".*/\1/'
 }
 
+# 写入默认配置文件
+write_default_config() {
+    local config_path=$1
+    cat > "$config_path" << 'EOF'
+{
+  "quark": {
+    "access_tokens": []
+  }
+}
+EOF
+}
+
 # 主函数
 main() {
     echo "检测平台..."
@@ -94,7 +106,6 @@ main() {
 
     # 创建临时目录
     TEMP_DIR=$(mktemp -d)
-    cd "$TEMP_DIR"
 
     # 下载并解压
     echo "下载并解压..."
@@ -102,11 +113,10 @@ main() {
     tar -xzf "${TEMP_DIR}/kuake.tar.gz" -C "$TEMP_DIR"
 
     # 查找二进制文件
-    BINARY_PATH=$(find "$TEMP_DIR" -type f -name "$BINARY_NAME*" -executable | head -n 1)
+    BINARY_PATH=$(find "$TEMP_DIR" -type f -name "$BINARY_NAME" -executable | head -n 1)
 
-    if [ -z "$BINARY_PATH" ]; then
-        # Windows 查找 .exe 文件
-        BINARY_PATH=$(find "$TEMP_DIR" -type f -name "${BINARY_NAME}*.exe" | head -n 1)
+    if [ -z "$BINARY_PATH" ] && [ "$OS" = "windows" ]; then
+        BINARY_PATH=$(find "$TEMP_DIR" -type f -name "${BINARY_NAME}.exe" | head -n 1)
     fi
 
     if [ -z "$BINARY_PATH" ]; then
@@ -115,59 +125,75 @@ main() {
     fi
 
     echo "安装二进制文件..."
-    # 安装二进制文件，优先使用 sudo，失败则安装到用户目录
+
+    # 系统级安装目录: /usr/local/lib/kuake/
+    # 用户级安装目录: ~/.kuake/
+    SYSTEM_KUAKE_DIR="/usr/local/lib/kuake"
+    USER_KUAKE_DIR="$HOME/.kuake"
+
     if [ "$OS" = "windows" ]; then
-        TARGET_DIR="/usr/local/bin"
-        if ! sudo cp "$BINARY_PATH" "${TARGET_DIR}/${BINARY_NAME}.exe" 2>/dev/null; then
-            TARGET_DIR="$HOME/.local/bin"
-            mkdir -p "$TARGET_DIR"
-            cp "$BINARY_PATH" "${TARGET_DIR}/${BINARY_NAME}.exe"
-        fi
-        sudo chmod +x "${TARGET_DIR}/${BINARY_NAME}.exe" 2>/dev/null || chmod +x "${TARGET_DIR}/${BINARY_NAME}.exe"
-        FINAL_BIN="${TARGET_DIR}/${BINARY_NAME}.exe"
+        BIN_NAME="${BINARY_NAME}.exe"
     else
-        TARGET_DIR="/usr/local/bin"
-        if ! sudo cp "$BINARY_PATH" "${TARGET_DIR}/${BINARY_NAME}" 2>/dev/null; then
-            TARGET_DIR="$HOME/.local/bin"
-            mkdir -p "$TARGET_DIR"
-            cp "$BINARY_PATH" "${TARGET_DIR}/${BINARY_NAME}"
-        fi
-        sudo chmod +x "${TARGET_DIR}/${BINARY_NAME}" 2>/dev/null || chmod +x "${TARGET_DIR}/${BINARY_NAME}"
-        FINAL_BIN="${TARGET_DIR}/${BINARY_NAME}"
+        BIN_NAME="$BINARY_NAME"
     fi
 
-    # 创建默认配置文件
-    echo "创建默认配置文件..."
-    cat > "${TARGET_DIR}/config.json" << 'EOF'
-{
-  "quark": {
-    "access_tokens": []
-  }
-}
-EOF
-    if [ "$OS" = "windows" ]; then
-        sudo chmod +x "${TARGET_DIR}/config.json" 2>/dev/null || chmod +x "${TARGET_DIR}/config.json"
+    # 尝试系统级安装（需要 sudo）
+    if sudo mkdir -p "$SYSTEM_KUAKE_DIR" 2>/dev/null && \
+       sudo cp "$BINARY_PATH" "${SYSTEM_KUAKE_DIR}/${BIN_NAME}" 2>/dev/null; then
+
+        KUAKE_DIR="$SYSTEM_KUAKE_DIR"
+        sudo chmod +x "${KUAKE_DIR}/${BIN_NAME}"
+
+        # 创建软链接到 /usr/local/bin
+        sudo ln -sf "${KUAKE_DIR}/${BIN_NAME}" "/usr/local/bin/${BIN_NAME}"
+        FINAL_BIN="/usr/local/bin/${BIN_NAME}"
+
+        # 使用 sudo 写入配置文件
+        echo "创建默认配置文件..."
+        write_default_config "${TEMP_DIR}/config.json"
+        sudo cp "${TEMP_DIR}/config.json" "${KUAKE_DIR}/config.json"
+        sudo chmod 644 "${KUAKE_DIR}/config.json"
+
+        SYSTEM_INSTALL=true
     else
-        sudo chmod +x "${TARGET_DIR}/config.json" 2>/dev/null || chmod +x "${TARGET_DIR}/config.json"
+        # 用户级安装（无需 sudo）
+        KUAKE_DIR="$USER_KUAKE_DIR"
+        mkdir -p "$KUAKE_DIR"
+        cp "$BINARY_PATH" "${KUAKE_DIR}/${BIN_NAME}"
+        chmod +x "${KUAKE_DIR}/${BIN_NAME}"
+
+        # 创建软链接到 ~/.local/bin
+        mkdir -p "$HOME/.local/bin"
+        ln -sf "${KUAKE_DIR}/${BIN_NAME}" "$HOME/.local/bin/${BIN_NAME}"
+        FINAL_BIN="$HOME/.local/bin/${BIN_NAME}"
+
+        # 写入配置文件
+        echo "创建默认配置文件..."
+        write_default_config "${KUAKE_DIR}/config.json"
+
+        SYSTEM_INSTALL=false
     fi
 
     # 清理临时目录
     rm -rf "$TEMP_DIR"
 
-    # 验证安装 - 使用 help 命令验证二进制可执行
+    # 验证安装
     echo ""
     echo "=========================================="
     echo "验证安装..."
     echo "=========================================="
-    $FINAL_BIN version >/dev/null 2>&1
-    if [ $? -eq 0 ]; then
+    if "$FINAL_BIN" version >/dev/null 2>&1; then
         echo "安装成功!"
         echo ""
-        echo "kuake 已安装到: $FINAL_BIN"
-        if [ "$TARGET_DIR" = "$HOME/.local/bin" ]; then
+        echo "程序目录: $KUAKE_DIR"
+        echo "可执行文件: $FINAL_BIN"
+        echo "配置文件: ${KUAKE_DIR}/config.json"
+
+        if [ "$SYSTEM_INSTALL" = false ]; then
             echo ""
             echo "注意: 安装到用户目录，请确保 $HOME/.local/bin 在 PATH 中"
         fi
+
         echo ""
         echo "=========================================="
         echo "下一步: 请运行以下命令登录"
