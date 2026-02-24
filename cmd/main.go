@@ -853,6 +853,70 @@ func handleShareCreate(client *sdk.QuarkClient, args []string) *CLIResult {
 	}
 }
 
+// downloadDirStats 目录下载统计信息
+type downloadDirStats struct {
+	TotalFiles      int
+	DownloadedFiles int
+	SkippedFiles    int
+	FailedFiles     int
+}
+
+// downloadDir 递归下载远端目录到本地
+// remotePath: 远端目录路径；localPath: 本地目标目录路径
+func downloadDir(client *sdk.QuarkClient, remotePath, localPath string, stats *downloadDirStats) error {
+	if err := os.MkdirAll(localPath, 0755); err != nil {
+		return fmt.Errorf("create local dir %s: %w", localPath, err)
+	}
+
+	listResult, err := client.List(remotePath)
+	if err != nil {
+		return fmt.Errorf("list %s: %w", remotePath, err)
+	}
+	if !listResult.Success {
+		return fmt.Errorf("list %s: %s", remotePath, listResult.Message)
+	}
+
+	listRaw, ok := listResult.Data["list"]
+	if !ok {
+		return nil // 空目录
+	}
+	fileList, ok := listRaw.([]sdk.QuarkFileInfo)
+	if !ok {
+		return fmt.Errorf("unexpected list response type: %T", listRaw)
+	}
+
+	for _, item := range fileList {
+		localItemPath := filepath.Join(localPath, item.Name)
+		if item.IsDirectory {
+			if err := downloadDir(client, item.Path, localItemPath, stats); err != nil {
+				fmt.Fprintf(os.Stderr, "[FAIL] subdir %s: %v\n", item.Path, err)
+			}
+			continue
+		}
+
+		stats.TotalFiles++
+
+		// 本地文件存在且大小一致则跳过
+		if localInfo, statErr := os.Stat(localItemPath); statErr == nil {
+			if localInfo.Size() == item.Size {
+				stats.SkippedFiles++
+				fmt.Fprintf(os.Stderr, "[SKIP] %s\n", item.Name)
+				continue
+			}
+		}
+
+		fmt.Fprintf(os.Stderr, "[DOWN] %s (%.2f MB)\n", item.Name, float64(item.Size)/(1024*1024))
+		if dlErr := client.DownloadFile(item.Fid, localItemPath, item.Name, nil); dlErr != nil {
+			fmt.Fprintf(os.Stderr, "[FAIL] %s: %v\n", item.Name, dlErr)
+			stats.FailedFiles++
+		} else {
+			stats.DownloadedFiles++
+		}
+	}
+
+	return nil
+}
+
 // handleDownload 处理下载命令：download <path> [dest]
 // 若提供 dest则下载到本地文件并输出进度；否则仅返回下载链接 JSON
 func handleDownload(client *sdk.QuarkClient, args []string) *CLIResult {
@@ -896,11 +960,39 @@ func handleDownload(client *sdk.QuarkClient, args []string) *CLIResult {
 
 	isDir, _ := fileInfo.Data["dir"].(bool)
 	if isDir {
-		return &CLIResult{
-			Success: false,
-			Code:    "INVALID_FILE_TYPE",
-			Message: "cannot download directory",
+		if destPath == "" {
+			return &CLIResult{
+				Success: false,
+				Code:    "INVALID_ARGS",
+				Message: "downloading a directory requires a local destination path: download <remote-dir> <local-dest>",
+			}
 		}
+		stats := &downloadDirStats{}
+		if err := downloadDir(client, path, destPath, stats); err != nil {
+			return &CLIResult{
+				Success: false,
+				Message: fmt.Sprintf("directory download failed: %v", err),
+			}
+		}
+		result := &CLIResult{
+			Success: true,
+			Code:    "OK",
+			Message: "Directory downloaded successfully",
+			Data: map[string]interface{}{
+				"path":             path,
+				"local_path":       destPath,
+				"total_files":      stats.TotalFiles,
+				"downloaded_files": stats.DownloadedFiles,
+				"skipped_files":    stats.SkippedFiles,
+				"failed_files":     stats.FailedFiles,
+			},
+		}
+		if stats.FailedFiles > 0 {
+			result.Success = false
+			result.Code = "PARTIAL_FAILURE"
+			result.Message = fmt.Sprintf("Directory download completed with %d failure(s)", stats.FailedFiles)
+		}
+		return result
 	}
 
 	fileName, _ := fileInfo.Data["file_name"].(string)
