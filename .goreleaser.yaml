@@ -1,4 +1,4 @@
-# .goreleaser.yml
+# .goreleaser.yaml
 # 构建配置
 version: 2
 
@@ -28,7 +28,7 @@ builds:
       - -X main.Version={{.Version}}
 
 changelog:
-  skip: true
+  disable: true
 
 release:
   github:
