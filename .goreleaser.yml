@@ -1,0 +1,37 @@
+# .goreleaser.yml
+# 构建配置
+
+project_name: kuake
+
+archives:
+  - id: default
+    format: binary
+    format_overrides:
+      - goos: windows
+        format: exe
+
+builds:
+  - id: kuake
+    main: ./cmd/main.go
+    binary: kuake
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+    ldflags:
+      - -s -w
+      - -X main.Version={{.Version}}
+
+changelog:
+  skip: true
+
+release:
+  github:
+    owner: CoderDKai
+    name: kuake_cli
+  draft: false
+  prerelease: auto
