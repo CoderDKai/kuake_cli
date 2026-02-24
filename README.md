@@ -58,7 +58,7 @@
 **Linux/macOS**:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/CoderDKai/kuake_cli/main/install.sh | bash
+curl -fsSL -H 'Cache-Control: no-cache' https://raw.githubusercontent.com/CoderDKai/kuake_cli/main/install.sh | bash
 ```
 
 安装完成后，运行以下命令登录：
@@ -348,6 +348,17 @@ export KUAKE_UPLOAD_PARALLEL=8
 
 ## 变更日志
 
+### v1.3.10
+
+- 配置文件路径改为 XDG 标准路径 `~/.config/kuake/config.json`，不再依赖可执行文件所在目录
+- 安装方式简化：二进制直接安装到 `/usr/local/bin/kuake`，去掉软链接和子目录
+- `SaveConfig` 写入时自动创建目录，无需手动预建
+
+### v1.3.9
+
+- 修复系统安装权限问题
+- 安装完成后自动进入交互式登录流程
+
 ### v1.3.7
 
 - 新增并行上传功能，支持通过 `--max_upload_parallel` 参数或 `KUAKE_UPLOAD_PARALLEL` 环境变量配置并行度（1-16，默认 4）
@@ -396,11 +407,10 @@ export KUAKE_UPLOAD_PARALLEL=8
   - Windows 用户可以使用 Windows 风格的路径（`d:\a\b\c`），会自动转换为 Unix 风格
   - Linux/macOS 用户继续使用标准 Unix 路径格式（`/a/b/c`）
   - 所有路径最终都会标准化为 Unix 风格，确保跨平台一致性
-- **配置文件**：
-  - 默认配置文件路径：`config.json`（当前目录）
-  - 配置文件参数是可选的，放在命令之后、其他参数之前
-  - 配置文件参数必须是 `.json` 扩展名
-  - 示例：`kuake user custom.json`（使用自定义配置文件）
+- **配置文件说明**：
+  - 默认配置文件路径：`~/.config/kuake/config.json`（XDG 标准路径）
+  - 安装脚本会自动创建默认配置文件，使用 `kuake login` 写入 token 即可
+  - 也可通过 `-c, --config <path>` 指定自定义路径
 - **操作说明**：
   - 所有操作都通过夸克网盘 API 进行
   - 需要有效的 Cookie（access_token）才能使用
